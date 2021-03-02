@@ -1,0 +1,35 @@
+Package: iRF
+Title: Iterative Random Forests
+Version: 3.0.0
+Date: 2018-11-14
+License: GPL-3
+Depends:
+    R (>= 3.1.2),
+Imports:
+    AUC,
+    Matrix,
+    data.table,
+    dplyr,
+    Rcpp,
+    methods,
+    foreach,
+    doParallel,
+    doRNG,
+    stringr,
+    ranger,
+    fastmatch,
+    memoise,
+    RColorBrewer,
+    rgl
+Suggests:
+    MASS,
+    testthat (>= 2.1.0),
+    covr
+Remotes:
+    r-lib/covr
+LinkingTo:
+    Rcpp
+Author: Sumanta Basu and Karl Kumbier (based on source codes from the R package 'randomForest' by Andy Liaw and Matthew Wiener and the original Fortran codes by Leo Breiman and Adele Cutler)
+Description: iteratively grows weighted random forests (for binary classification and regression), finds high-order feature interactions in a stable fashion
+Maintainer: Karl Kumbier <kkumbier@berkeley.edu>
+RoxygenNote: 6.1.1
