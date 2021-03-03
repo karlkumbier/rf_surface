@@ -1,17 +1,4 @@
 #' @importFrom stringr str_replace_all str_remove_all str_split
-printAcc <- function(fit, y, class.irf) {
-  # Generate prediction accuracy string for printing
-  if (class.irf) {
-    acc <- auc(roc(fit$test$votes[,2], y))
-    out <- paste('AUROC: ', round(acc, 2))
-  } else {
-    pct.var <- 1 - mean((fit$test$predicted - y) ^ 2) / var(y)
-    pct.var <- max(pct.var, 0)
-    out <- paste('% var explained:', pct.var * 100)
-  }
-  return(out)
-}
-
 groupVars <- function(varnames.grp, x) {
   # Generate grouped variable names
   if (is.null(varnames.grp)) {
@@ -104,6 +91,20 @@ lreplicate <- function(n, expr, ...) {
   # replicate with list return
   out <- replicate(n, expr, ..., simplify=FALSE)
   return(out)
+}
+
+subsetReadForest <- function(read.forest, subset.idcs) {
+  # Subset nodes from readforest output
+  if (!is.null(read.forest$node.feature))
+    read.forest$node.feature <- read.forest$node.feature[subset.idcs,]
+
+  if (!is.null(read.forest$tree.info))
+    read.forest$tree.info <- read.forest$tree.info[subset.idcs,]
+
+  if (!is.null(read.forest$node.obs))
+    read.forest$node.obs <- read.forest$node.obs[,subset.idcs]
+
+  return(read.forest)
 }
 
 `%<-meta.cache%` <- function(suite, RF.type, verify=c(TRUE, FALSE)) {

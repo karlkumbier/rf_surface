@@ -44,7 +44,17 @@ genSurface <- function(x, y, int,
                        drop0=FALSE,
                        min.nd=5) {
   
+  n <- nrow(x)
+  p <- ncol(x)
+ 
   # Check for valid interaction
+  if (!is.numeric(int)) {
+      # TODO: check that this doesn't create issues
+      # TODO: support for unsigned interactions?
+      int <- int2Id(int, varnames, signed=TRUE)
+      int <- int %% p + p * (int == p)
+  }
+  
   if (length(int) != 2)
     stop('Response surface can only be generated over 2 features')
 
@@ -60,19 +70,15 @@ genSurface <- function(x, y, int,
   # Extract hyperrectangles from readForest output
   if (is.null(rectangles)) { 
       # Convert standard format int to indices
-      if (!is.numeric(int)) int <- int2Id(int, varnames, signed=TRUE)
       rectangles <- forestHR(read.forest, int, min.nd)
   }
-
-  n <- nrow(x)
-  p <- ncol(x)
 
   # Generate grid to plot surface over either as raw values or quantiles
   if (is.null(bins)) {
     # Sequences spanning the range of each interacting feature
     g1 <- seq(min(x[,int[1]]), max(x[,int[1]]), length.out=nbin)
     g2 <- seq(min(x[,int[2]]), max(x[,int[2]]), length.out=nbin)
-    } else {
+  } else {
     # Pre-specified grid sequence
     g1 <- bins$g1
     g2 <- bins$g2
@@ -82,32 +88,25 @@ genSurface <- function(x, y, int,
   g1n <- round(g1, 2)
   g2n <- round(g2, 2)
 
-  #############################################################################
-  # Update: general filtering of leaf nodes
-  #############################################################################
-  # Drop class 0 leaf nodes
-  # TODO: this should be generalized node filtering based on prediction
-  if (drop0) rectangles <- filter(rectangles, prediction == 1)
+  # Define a set of functions for filtering leaf node hyperrectangles
+  rules <- list()
+  rules[[1]] <- function(x) filter(x, prediction == 1)
+  rules[[2]] <- function(x) group_by(x, tree) %>% filter(size.node == max(size.node))
 
-  # Take largest decision rule from each tree
-  if (filt.rule) {
-    rectangles <- group_by(rectangles, tree) %>%
-      filter(size.node == max(size.node))
-  }
-  #############################################################################
+  # Filter leaf node hyperrectangles
+  rectangles <- filterHR(rectangles, rules)
 
   # Get thresholds and sign for interaction rules
-  # TODO: rbindlist?
-  tt <- do.call(rbind, rectangles$splits)
+  tt <- rectangles$splits
 
   # TODO: RCPP wrapper for this
   # Evaluate distriution of responses across each decision rule
   grid <- matrix(0, nrow=nbin, ncol=nbin)
 
-  if (wt.node == 'none') wt <- rep(1, nrow(rectangles))
-  if (wt.node == 'size.node') wt <- rectangles$size.node
+  if (wt.node == 'none') wt <- rep(1, nrow(tt))
+  if (wt.node == 'size.node') wt <- rectangles$nodes$size.node
 
-  for (i in 1:nrow(rectangles)) {
+  for (i in 1:nrow(tt)) {
     
     # weight response surfaces based on size of leaf node
 
@@ -143,6 +142,20 @@ genSurface <- function(x, y, int,
   return(grid)
 }
 
+filterHR <- function(rectangles, rules) {
+    # Applies a collection of filtering functions to leaf nodes
+    if (!is.list(rules)) rukes <- list(rules)
+    
+    # Iterate over filter functions
+    for (r in rules) {
+       rectangles$nodes <- r(rectangles$nodes) 
+    }
+
+    # Subset threshold matrix based on remaining nodes
+    rectangles$splits <- rectangles$splits[rectangles$nodes$ID,]
+    return(rectangles)
+}
+
 forestHR <- function(read.forest, int, min.nd) {
   # Read hyperrectangles from RF for a specified interactin
   # args:
@@ -150,7 +163,11 @@ forestHR <- function(read.forest, int, min.nd) {
   #     and tree.info entries
   #   int: vector of indices specifying features for hyperrectangles
   #   min.nd: minimum node size to extract hyperrectangles from
-
+  
+  # Extract splitting features and thresholds
+  p <- ncol(read.forest$node.feature) / 2
+  read.forest$node.feature <- read.forest$node.feature[,1:p] + read.forest$node.feature[,(p + 1):(2 * p)]
+ 
   # Set active nodes for interaction
   int.lf <- Matrix::rowMeans(read.forest$node.feature[,int] != 0) == 1
 
@@ -158,20 +175,13 @@ forestHR <- function(read.forest, int, min.nd) {
   id.subset <- int.lf & read.forest$tree.info$size.node >= min.nd
   read.forest <- subsetReadForest(read.forest, id.subset)
 
-  # Extract splitting features and thresholds
-  p <- ncol(read.forest$node.feature) / 2
-  nf <- read.forest$node.feature[,1:p] + read.forest$node.feature[,(p + 1):(2 * p)]
   
-  # TODO: can we optimize below?
-  idcs <- lapply(int, function(ii) {(nf@p[ii] + 1):nf@p[ii + 1]})
-  row.id <- nf@i[idcs[[1]]] + 1
-  thresh <- nf@x[unlist(idcs)]
-  idsplit <- rep(1:length(idcs[[1]]), length(int))
-
   # Group data by leaf node for return
-  out <- select(read.forest$tree.info, prediction, node.idx, tree, size.node)
-  out$vars <- replicate(length(idcs[[1]]), int, simplify=FALSE)
-  out$splits <- split(thresh, idsplit)
+  nodes <- read.forest$tree.info %>% 
+      select(prediction, node.idx, tree, size.node) %>%
+      mutate(ID=1:n())
 
-  return(out)
+  splits <- read.forest$node.feature[,int]
+
+  return(list(nodes=nodes, splits=splits, int=int))
 }
