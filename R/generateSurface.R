@@ -28,49 +28,59 @@
 #'  be dropped before generating the response surface.
 #'
 #' @export
-#TODO: return..., imports - subsetReadForest, ??? filt.rule, surf.scale, drop0 ???
-#TODO: is int assumed indices or interaction format?
-#TODO: update largest.rule to be one of largest, sample, full (and class 0/1),
-#   general filtering function
-genSurface <- function(x, y, int, 
+genSurface <- function(x, int,
+                       y=NULL,
                        read.forest=NULL,
                        rectangles=NULL,
-                       varnames=NULL,
+                       wt.node='size',
+                       varnames=colnames(x),
                        nbin=100,
                        bins=NULL,
                        pred.prob=FALSE,
-                       largest.rule=TRUE,
-                       surf.scale=1,
-                       drop0=FALSE,
-                       min.nd=5) {
+                       filter.rules=NULL) {
   
   n <- nrow(x)
   p <- ncol(x)
  
+  if (is.null(y) & !pred.prob) {
+    pred.prob <- TRUE
+    warning('No response supplied, using pred.prob=TRUE')
+  }
+  
   # Check for valid interaction
   if (!is.numeric(int)) {
-      # TODO: check that this doesn't create issues
-      # TODO: support for unsigned interactions?
-      int <- int2Id(int, varnames, signed=TRUE)
+      signed <- str_detect(int, '(\\+|-)')
+      int <- int2Id(int, varnames, signed=signed)
       int <- int %% p + p * (int == p)
   }
   
-  if (length(int) != 2)
+  if (length(int) != 2) {
     stop('Response surface can only be generated over 2 features')
+  }
 
   # Check for one of read.forest/rectangles
-  if (is.null(read.forest) & is.null(rectangles))
+  if (is.null(read.forest) & is.null(rectangles)) {
       stop('Specify one of `rectangles` or `read.forest`')
+  }
 
   # Set feature names and check for replicates
   varnames <- groupVars(varnames, x)
-  if (any(duplicated(varnames)))
+  if (any(duplicated(varnames))) {
     stop('Replicate features not supported')
-
+  }
+  
   # Extract hyperrectangles from readForest output
   if (is.null(rectangles)) { 
-      # Convert standard format int to indices
-      rectangles <- forestHR(read.forest, int, min.nd)
+    
+    # Collapse node feature matrix - will use any int between features, 
+    # regardless of sign
+    if (ncol(read.forest$node.feature) == 2 * p) {
+      read.forest$node.feature <- read.forest$node.feature[,1:p] + 
+        read.forest$node.feature[,(p + 1):(2 * p)]
+    }
+    
+    # Convert standard format int to indices
+    rectangles <- forestHR(read.forest, int)
   }
 
   # Generate grid to plot surface over either as raw values or quantiles
@@ -89,54 +99,65 @@ genSurface <- function(x, y, int,
   g2n <- round(g2, 2)
 
   # Define a set of functions for filtering leaf node hyperrectangles
-  rules <- list()
-  rules[[1]] <- function(x) filter(x, prediction == 1)
-  rules[[2]] <- function(x) group_by(x, tree) %>% filter(size.node == max(size.node))
+  if (is.null(filter.rules)) {
+    filter.rules <- list()
+    
+    filter.rules[[1]] <- function(x) {
+      filter(x, size.node >= 5) 
+    }
+    
+    filter.rules[[2]] <- function(x) {
+      group_by(x, tree) %>% sample_n(1) 
+    }
+  }
 
   # Filter leaf node hyperrectangles
-  rectangles <- filterHR(rectangles, rules)
+  rectangles <- filterHR(rectangles, filter.rules)
 
   # Get thresholds and sign for interaction rules
-  tt <- rectangles$splits
+  thresholds <- rectangles$splits
 
-  # TODO: RCPP wrapper for this
   # Evaluate distriution of responses across each decision rule
   grid <- matrix(0, nrow=nbin, ncol=nbin)
 
-  if (wt.node == 'none') wt <- rep(1, nrow(tt))
-  if (wt.node == 'size.node') wt <- rectangles$nodes$size.node
+  if (wt.node == 'none') wt <- rep(1, nrow(thresholds))
+  if (wt.node == 'size') wt <- rectangles$nodes$size.node
 
-  for (i in 1:nrow(tt)) {
+  nsurface <- 0
+  for (i in 1:nrow(thresholds)) {
     
     # weight response surfaces based on size of leaf node
 
     # Evalaute which observations/grid elements correspond to current HR
-    idcs1 <- g1 >= tt[i, 1]
-    x1 <- x[,int[1]] >= tt[i, 1]
+    i1 <- g1 >= thresholds[i, 1]
+    x1 <- x[,int[1]] >= thresholds[i, 1]
 
-    idcs2 <- g2 >= tt[i, 2]
-    x2 <- x[,int[2]] >= tt[i, 2]
+    i2 <- g2 >= thresholds[i, 2]
+    x2 <- x[,int[2]] >= thresholds[i, 2]
 
     if (pred.prob) {
       # Evaluate RF predictions for region corresponding to current HR
-      yy <- rectangles$prediction[i]
-      grid[idcs1, idcs2] <- grid[idcs1, idcs2] + yy * wt[i]
+      y <- rectangles$nodes$prediction[i]
+      grid[i1, i2] <- grid[i1, i2] + y * wt[i]
     } else {
-      if (any(x1 & x2))
-        grid[idcs1, idcs2] <- grid[idcs1, idcs2] +  mean(y[x1 & x2]) * wt[i]
-      if (any(!x1 & x2))
-        grid[!idcs1, idcs2] <- grid[!idcs1, idcs2] +  mean(y[!x1 & x2]) * wt[i]
-      if (any(x1 & !x2))
-        grid[idcs1, !idcs2] <- grid[idcs1, !idcs2] +  mean(y[x1 & !x2]) * wt[i]
-      if (any(!x1 & !x2))
-        grid[!idcs1, !idcs2] <- grid[!idcs1, !idcs2] +  mean(y[!x1 & !x2]) * wt[i]
+      
+      if (any(x1 & x2)) {
+        nsurface <- nsurface + wt[i]
+        grid[i1, i2] <- grid[i1, i2] +  mean(y[x1 & x2]) * wt[i]
+        
+        y.inactive <- mean(y[!x1 | !x2]) * wt[i]
+        grid[!i1, i2] <- grid[!i1, i2] +  y.inactive
+        grid[i1, !i2] <- grid[i1, !i2] +  y.inactive
+        grid[!i1, !i2] <- grid[!i1, !i2] +  y.inactive
+      }
+
     }
   }
 
-  # Rescale surface for node size and generate corresponding color palette
-  nsurface <- sum(rectangles$size.node)
+  # Rescale surface for node size
   if (nsurface != 0) grid <- grid / nsurface
-  if (all(grid == 0)) grid <- grid + 1e-3
+  if (all(grid == 0)) grid <- grid + 1e-10
+  
   rownames(grid) <- g1n
   colnames(grid) <- g2n
   return(grid)
@@ -144,7 +165,7 @@ genSurface <- function(x, y, int,
 
 filterHR <- function(rectangles, rules) {
     # Applies a collection of filtering functions to leaf nodes
-    if (!is.list(rules)) rukes <- list(rules)
+    if (!is.list(rules)) rules <- list(rules)
     
     # Iterate over filter functions
     for (r in rules) {
@@ -156,25 +177,15 @@ filterHR <- function(rectangles, rules) {
     return(rectangles)
 }
 
-forestHR <- function(read.forest, int, min.nd) {
+forestHR <- function(read.forest, int) {
   # Read hyperrectangles from RF for a specified interactin
   # args:
   #   read.forest: list as returned by readForest, including node.feature 
   #     and tree.info entries
   #   int: vector of indices specifying features for hyperrectangles
-  #   min.nd: minimum node size to extract hyperrectangles from
-  
-  # Extract splitting features and thresholds
-  p <- ncol(read.forest$node.feature) / 2
-  read.forest$node.feature <- read.forest$node.feature[,1:p] + read.forest$node.feature[,(p + 1):(2 * p)]
- 
+
   # Set active nodes for interaction
   int.lf <- Matrix::rowMeans(read.forest$node.feature[,int] != 0) == 1
-
-  # Subset to active nodes larger than min.nd
-  id.subset <- int.lf & read.forest$tree.info$size.node >= min.nd
-  read.forest <- subsetReadForest(read.forest, id.subset)
-
   
   # Group data by leaf node for return
   nodes <- read.forest$tree.info %>% 
