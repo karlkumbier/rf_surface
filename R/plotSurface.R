@@ -1,33 +1,37 @@
 #' Plot interaction
 #'
-#' Generate response surface plots for a given interaction.
+#' Visualization of response surface plots.
 #' @param x numeric feature matrix, with replicate features grouped
+#' @param int signed interaction to plot. If numeric, int is assumed to
+#'   correspond to column indices to be plotted for interaction. If character,
+#'   assumed to be formatted as 'X1+_X2+_X3-_...'
 #' @param y response vector.  
-#' @param int signed interaction to plot. Formatted as 'X1+_X2+_X3-_...'
+#' @param fit a fitted random forest, from packages randomForest or ranger.
+#' @param read.forest output of readForest
 #' @param varnames character vector indicating feature names. If NULL,
 #'  colnames(x) are used as feature names.
-#' @param read.forest output of readForest
-#' @param qcut: quantile to define low/high levels of additional features beyond
-#'  order-2 interations. Thresholds will generated using the specified quantile
-#'  of random forest thresholds for corresponding features. 
-#' @param col.pal color palette for response surfaces
+#' @param col.pal color palette for response surfaces. A function that takes an
+#'   integer input and returns colors to be use in the palette.
 #' @param xlab x-axis label
 #' @param ylab y-axis label
 #' @param zlab z-axis label
-#' @param slab label for splitting variable
-#' @param range.col range of response values for color palette
+#' @param slab for order 3 and 4 interactions, label for split plots
 #' @param z.range z-axiz range
-#' @param grid.surface size of grid to generate response surfaces over.
+#' @param nbin: number of bins to plot surface map over
 #' @param min.surface minimum number of observations required to generate a
 #'  response surface.
-#' @param min.nd minimum leaf node size to extract decision rules from.
-#' @param pred.prob: if TRUE, z-axis indicates predicted probability from the
-#'  random forest. If false, z-axis indicates distribution of responses y
-#' @param plot.enrich: used for classification to plot response surface relative
-#' to proportion of class-1 observation.
-#' @param drop0: if TRUE, class-0 leaf nodes are removed before plotting
-#' response surfaces.
-#' @param nc: number of columns in plot
+#' @param filter.rules: a list of filtering functions to be applied to rf
+#'   decision paths. If NULL, default rules will filter to a random sample of
+#'   10% of leaf nodes with at least 5 observations.
+#' @param filter_x a filtering function to be applied to data matrix. Takes as
+#'   arguments x (data matrix), int (numeric vector of interaciton ids), and
+#'   thresholds (numeric vector of rf thresholds, columns corresponding to
+#'   features in int), returns indices of x to be kept.
+#' @param wt.node indicator for how nodes are to be weighted in response
+#'   surfaces. One of `size` - weighting proportional to leaf node size or
+#'   `none` - indicating uniform weighting.
+#' @param type one of `rgl` - 3d response surface or ggplot - 2d response
+#'   surface
 #' @param main plot title for response surfaces
 #'
 #' @export
@@ -37,29 +41,40 @@
 #' @importFrom dplyr select group_by summarize filter
 #' @importFrom data.table data.table
 #' @importFrom stringr str_split str_remove_all str_replace_all
-#' @importFrom RColorBrewer brewer.pal
-plotInt <- function(x, int, read.forest,
-                    y=NULL,
-                    varnames=colnames(x),
-                    quantile.cut=0.5,
-                    col.pal=magma, 
-                    xlab=NULL, 
-                    ylab=NULL, 
-                    zlab=NULL, 
-                    slab=NULL,
-                    z.range=NULL,
-                    nbin=50,
-                    min.surface=20,
-                    min.nd=5,
-                    pred.prob=FALSE,
-                    filter.rules=NULL,
-                    wt.node='size',
-                    type='rgl',
-                    main=NULL) {
+# TODO: #' @importFrom RColorBrewer brewer.pal - do we need this??
+# TODO: #' @importFrom ggplot - functions
+plotInt <- function(x, int,  
+                     y=NULL,
+                     fit=NULL,
+                     read.forest=NULL,
+                     varnames=colnames(x),
+                     col.pal=magma, 
+                     xlab=NULL, 
+                     ylab=NULL, 
+                     zlab=NULL, 
+                     slab=NULL,
+                     z.range=NULL,
+                     nbin=50,
+                     filter.rules=NULL,
+                     filterX=NULL,
+                     wt.node='size',
+                     type='rgl',
+                     main=NULL) {
   
   n <- nrow(x)
   p <- ncol(x)
-  
+  pred.prob <- is.null(y)
+
+  # Check for one of read.forest/fit
+  if (is.null(read.forest) & is.null(fit)) {
+      stop('Specify one of `read.forest` or `fit`')
+  }
+
+  # Read out RF decision paths
+  if (is.null(read.forest)) {
+    read.forest <- readForest(fit, x=x, oob.importance=FALSE)
+  }
+
   # Check whether read.forest is valid
   if (is.null(read.forest$node.feature)) stop('read.forest missing node.feature')
   if (is.null(read.forest$node.obs)) stop('read.forest missing node.obs')
@@ -78,151 +93,79 @@ plotInt <- function(x, int, read.forest,
   if (is.factor(y)) y <- as.numeric(y) - 1
   
   # Set z-axis scaling
-  if (is.null(z.range) & !is.null(y)) z.range <- range(y)
-  if (is.null(z.range) & is.null(y)) 
-    z.range <- range(read.forest$tree.info$prediction)
-  
-  # Get feature indices for interaction in nf, x, and leaf ndoes
-  int <- str_remove_all(str_split(int, '_')[[1]], '[-\\+]')
-  int <- int2Id(int, varnames, split=TRUE, signed=FALSE)
+  if (is.null(z.range) & !pred.prob) z.range <- range(y)
+  if (is.null(z.range) & pred.prob) z.range <- range(read.forest$tree.info$prediction)
+ 
+  # Check for valid interaction and convert to numeric IDs
+  if (!is.numeric(int)) {
+      signed <- str_detect(int, '(\\+|-)')
+      int <- int2Id(int, varnames, signed=signed)
+      int <- int %% p + p * (int == p)
+  }
   
   # Collapse node feature matrix to unsigned
   nf <- read.forest$node.feature
   if (ncol(nf) == 2 * p) nf <- nf[,1:p] + nf[,(p + 1):(2 * p)]
-  
-  # Determine leaf nodes containing interaction
-  int.lf <- Matrix::rowMeans(nf[,int] != 0) == 1
-  
-  if (length(int) > 2) {
-    # Evaluate thresholds for features beyond order-2
-    qcut <- function(x) quantile(x, probs = quantile.cut)
-    thr <- apply(nf[int.lf, int], MAR=2, qcut)
-    
-    # Assign each observation to a unique plot 
-    id.plot <- 3:length(int)
-    x.thresh <- t(x[,int[id.plot]]) > thr[id.plot]
-    id <- apply(x.thresh, MAR=2, paste, collapse='_')
-  } else {
-    id <- rep(1, nrow(x))
-    id.plot <- 1:2
-  }
   
   # Generate grid of x/y values for surface maps
   bins <- quantileGrid(x, nbin, int[1:2])
   
   # Extract hyperrectangles from RF decision paths
   rectangles <- forestHR(read.forest, int)
-  
-  # Generate surface maps for each group of observations
-  surfaces <- lapply(sort(unique(id)), function(iid) {
-    
-    # Get obserations corresponding to current plot
-    ii <- id == iid
-    
-    # Check that the current plot contains the minimum number of observations
-    if (sum(ii) < min.surface) {
-      warning('Fewer than min.surface observations, skipping surface')
-      return(NULL)
-    }
-    
-    # Set response to be passed in for surface
-    if (is.null(y)) {
-      ysurface.i <- NULL
-    } else {
-      ysurface.i <- y[ii]
-    }
-    
-    # Generate surface for current plot
-    genSurface(x[ii,], int[1:2],
-               y=ysurface.i,
-               varnames=varnames, 
-               rectangles=rectangles, 
-               wt.node=wt.node,
-               pred.prob=pred.prob,
-               filter.rules=filter.rules,
-               bins=bins)
-  })
-  
+
+  # TODO: check on number of hyperrectangles returned
+
+  # Filter data matrix if rules specified
+  if (!is.null(filterX)) {
+    id <- filterX(x, int, rectangles$splits)
+    x <- x[id,]
+    if (!is.null(y)) y <- y[id]
+  }
+   
+  # Generate surface for current plot
+  surface <- genSurface(x, int[1:2],
+                        y=y,
+                        varnames=varnames, 
+                        rectangles=rectangles, 
+                        wt.node=wt.node,
+                        filter.rules=filter.rules,
+                        bins=bins)
+
   # Initialize windows for rgl plots
+  # TODO: debug for rgl open/close window
   if (type == 'rgl') {
-    ngroup <- length(unique(id))
-    if (ngroup > 4) 
-      stop('Surface plots supported for up to order-4 interactions')
-    
-    # Initialize window for 1 response surface, order-2 interaction
-    if (ngroup == 1) {
-      open3d()
-      par3d(windowRect = c(0, 0, 1500, 1500))
-    } 
-    
-    # Initialize window for 2 response surface, order-3 interaction
-    if (ngroup == 2) {
-      open3d()
-      nr <- ngroup / 2
-      mfrow3d(nr=nr, nc=2, sharedMouse = T)
-      par3d(windowRect = c(0, 0, 1500, 1500))
-    } 
-    
-    # Initialize window for 2 response surface, order-4 interaction
-    if (ngroup == 4) {
-      open3d()
-      nr <- ngroup / 2
-      mfrow3d(nr=nr, nc=2, sharedMouse = T)
-      par3d(windowRect = c(0, 0, 1500, 1500))
-    } 
+    close3d()
+    open3d()
+    par3d(windowRect = c(0, 0, 1500, 1500))
   }
   
-  #TODO: quantile names for grid
+  # Set quantile names for grid
+  colnames(surface) <- seq(0, 1, length.out=nrow(surface))
+  rownames(surface) <- seq(0, 1, length.out=ncol(surface))
   
-  # Iterate over observation groups to generate response surfaces
-  for (i in 1:length(unique(id))) {
-    if (is.null(surfaces[[i]])) next
-    
-    # Set quantile names for grid
-    colnames(surfaces[[i]]) <- seq(0, 1, length.out=nbin + 1)
-    rownames(surfaces[[i]]) <- seq(0, 1, length.out=nbin + 1)
-    
-    
-    
-    # Reformat group names for title
-    ii <- sort(unique(id))[i]
-    ii <- str_replace_all(ii, 'TRUE', 'High')
-    ii <- str_replace_all(ii, 'FALSE', 'Low')
-    
-    # Generate title for response surface
-    if (length(int) > 2) {
-      i.split <- str_split(ii, '_')[[1]]
-      if (is.null(slab)) slab <- int.clean[3:length(int)]
-      xii <- paste(slab, i.split, sep=': ')
-      main.ii <- paste(main, paste(xii, collapse=', '), collapse=' - ')
-    } else {
-      main.ii <- main
-    } 
-    
-    # Select plotting method, one of rgl or ggplot
-    plotFun <- ifelse(type == 'rgl', rglplotInt2, ggplotInt2)
-    
-    # Generate response surface for curent group
-    plotFun(surfaces[[i]], 
-            col.pal=col.pal,
-            xlab=xlab, 
-            ylab=ylab, 
-            zlab=zlab, 
-            main=main.ii)
-    
-    if (type == 'rgl') rgl.viewpoint(zoom=0.95, theta=-5, phi=-60)
-  }
+  # Select plotting method, one of rgl or ggplot
+  plotFun <- ifelse(type == 'rgl', rglplotSurface2, ggplotSurface2)
+  
+  # Generate response surface for curent group
+  plotFun(surface, 
+          col.pal=col.pal,
+          xlab=xlab, 
+          ylab=ylab, 
+          zlab=zlab, 
+          main=main)
+  
+  if (type == 'rgl') rgl.viewpoint(zoom=0.95, theta=-5, phi=-60)
 }
 
 
-ggplotInt2 <- function(surface,
-                       col.pal=magma, 
-                       xlab=NULL, 
-                       ylab=NULL, 
-                       zlab=NULL,
-                       main=NULL,
-                       z.range=range(surface),
-                       axes=NULL) {
+ggplotSurface2 <- function(surface,
+                           col.pal=magma, 
+                           xlab=NULL, 
+                           ylab=NULL, 
+                           zlab=NULL,
+                           main=NULL,
+                           z.range=range(surface)) {
+
   
   # Set axis names
   xlab <- ifelse(is.null(xlab), '', xlab)
@@ -240,14 +183,14 @@ ggplotInt2 <- function(surface,
   plot(p)
 }
 
-rglplotInt2 <- function(surface,
-                        col.pal=magma, 
-                        xlab=NULL, 
-                        ylab=NULL, 
-                        zlab=NULL,
-                        main=NULL,
-                        z.range=range(surface),
-                        axes=TRUE) {
+rglplotSurface2 <- function(surface,
+                            col.pal=magma, 
+                            xlab=NULL, 
+                            ylab=NULL, 
+                            zlab=NULL,
+                            main=NULL,
+                            z.range=range(surface),
+                            axes=TRUE) {
   # Generates surface map plot of order-2 interaction
   # args:
   #   surface: response surface matrix, output of genSurface
