@@ -24,4 +24,7 @@ read.forest <- readForest(fit$rf.list, x=x, oob.importance=FALSE)
 rule.list <- list()
 rule.list[[1]] <- function(x) group_by(x, tree) %>% sample_frac(0.1)
 surface <- genSurface(x, 'X1+_X2+', y=y, read.forest=read.forest, filter.rules=rule.list)
-plotInt2(surface, col.pal=magma(1000))
+plotInt(x, 'X1+_X2+', read.forest, y)
+plotInt(x, 'X1+_X2+', read.forest, y, type='ggplot', xlab='x', ylab='y', zlab='p')
+x
+
