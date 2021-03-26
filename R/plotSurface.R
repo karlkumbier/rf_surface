@@ -36,13 +36,12 @@
 #'
 #' @export
 #'
-#' @importFrom rgl open3d persp3d par3d rgl.viewpoint movie3d spin3d mfrow3d 
-#'  title3d
+#' @importFrom rgl open3d persp3d par3d rgl.viewpoint movie3d spin3d title3d
 #' @importFrom dplyr select group_by summarize filter
 #' @importFrom data.table data.table
 #' @importFrom stringr str_split str_remove_all str_replace_all
-# TODO: #' @importFrom RColorBrewer brewer.pal - do we need this??
-# TODO: #' @importFrom ggplot - functions
+#' @importFrom viridis magma
+#' @importFrom ggplot2 ggplot geom_tile scale_fill_gradientn xlab ylab labs
 plotInt <- function(x, int,  
                      y=NULL,
                      fit=NULL,
@@ -60,7 +59,7 @@ plotInt <- function(x, int,
                      wt.node='size',
                      type='rgl',
                      main=NULL) {
-  
+ 
   n <- nrow(x)
   p <- ncol(x)
   pred.prob <- is.null(y)
@@ -88,7 +87,7 @@ plotInt <- function(x, int,
   
   # Check for duplicate features
   if (any(duplicated(varnames))) stop('Replicate features not supported')
-  
+
   # Convert binary factor
   if (is.factor(y)) y <- as.numeric(y) - 1
   
@@ -100,28 +99,28 @@ plotInt <- function(x, int,
   if (!is.numeric(int)) {
       signed <- str_detect(int, '(\\+|-)')
       int <- int2Id(int, varnames, signed=signed)
-      int <- int %% p + p * (int == p)
+      int <- int %% p + p * (int %% p == 0)
   }
   
   # Collapse node feature matrix to unsigned
-  nf <- read.forest$node.feature
-  if (ncol(nf) == 2 * p) nf <- nf[,1:p] + nf[,(p + 1):(2 * p)]
+  if (ncol(read.forest$node.feature) == 2 * p) {
+    read.forest$node.feature <- read.forest$node.feature[,1:p] + 
+      read.forest$node.feature[,(p + 1):(2 * p)]
+  }
   
   # Generate grid of x/y values for surface maps
   bins <- quantileGrid(x, nbin, int[1:2])
   
   # Extract hyperrectangles from RF decision paths
   rectangles <- forestHR(read.forest, int)
-
-  # TODO: check on number of hyperrectangles returned
-
+  
   # Filter data matrix if rules specified
   if (!is.null(filterX)) {
     id <- filterX(x, int, rectangles$splits)
     x <- x[id,]
     if (!is.null(y)) y <- y[id]
   }
-   
+
   # Generate surface for current plot
   surface <- genSurface(x, int[1:2],
                         y=y,
@@ -130,14 +129,6 @@ plotInt <- function(x, int,
                         wt.node=wt.node,
                         filter.rules=filter.rules,
                         bins=bins)
-
-  # Initialize windows for rgl plots
-  # TODO: debug for rgl open/close window
-  if (type == 'rgl') {
-    close3d()
-    open3d()
-    par3d(windowRect = c(0, 0, 1500, 1500))
-  }
   
   # Set quantile names for grid
   colnames(surface) <- seq(0, 1, length.out=nrow(surface))
@@ -152,9 +143,9 @@ plotInt <- function(x, int,
           xlab=xlab, 
           ylab=ylab, 
           zlab=zlab, 
-          main=main)
+          main=main,
+          z.range=z.range)
   
-  if (type == 'rgl') rgl.viewpoint(zoom=0.95, theta=-5, phi=-60)
 }
 
 
@@ -166,7 +157,7 @@ ggplotSurface2 <- function(surface,
                            main=NULL,
                            z.range=range(surface)) {
 
-  
+  # TODO: fixed z-range for visualizations
   # Set axis names
   xlab <- ifelse(is.null(xlab), '', xlab)
   ylab <- ifelse(is.null(ylab), '', ylab)

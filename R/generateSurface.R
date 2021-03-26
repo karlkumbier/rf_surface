@@ -57,9 +57,9 @@ genSurface <- function(x, int,
   if (!is.numeric(int)) {
       signed <- str_detect(int, '(\\+|-)')
       int <- int2Id(int, varnames, signed=signed)
-      int <- int %% p + p * (int == p)
+      int <- int %% p + p * (int %% p == 0)
   }
-  
+ 
   if (length(int) != 2) {
     stop('Response surface can only be generated over 2 features')
   }
@@ -78,9 +78,6 @@ genSurface <- function(x, int,
       read.forest$node.feature <- read.forest$node.feature[,1:p] + 
         read.forest$node.feature[,(p + 1):(2 * p)]
     }
-    
-    # Generate hyperrectangles corresponding to int
-    rectangles <- forestHR(read.forest, int)
   }
 
   # Generate grid to plot surface over either as raw values or quantiles
@@ -107,7 +104,7 @@ genSurface <- function(x, int,
     }
     
     filter.rules[[2]] <- function(x) {
-      group_by(x, tree) %>% sample_n(10) 
+      sample_n(x, min(nrow(x), 500))
     }
   }
 
