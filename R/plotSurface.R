@@ -42,6 +42,7 @@
 #' @importFrom stringr str_split str_remove_all str_replace_all
 #' @importFrom viridis magma
 #' @importFrom ggplot2 ggplot geom_tile scale_fill_gradientn xlab ylab labs
+#' @importFrom plotly plotly add_surface layout
 plotInt <- function(x, int,  
                      y=NULL,
                      fit=NULL,
@@ -135,10 +136,10 @@ plotInt <- function(x, int,
   rownames(surface) <- seq(0, 1, length.out=ncol(surface))
   
   # Select plotting method, one of rgl or ggplot
-  plotFun <- ifelse(type == 'rgl', rglplotSurface2, ggplotSurface2)
+  plotFun <- ifelse(type == 'rgl', plotlyplotSurface2, ggplotSurface2)
   
   # Generate response surface for curent group
-  plotFun(surface, 
+  p <- plotFun(surface, 
           col.pal=col.pal,
           xlab=xlab, 
           ylab=ylab, 
@@ -146,6 +147,7 @@ plotInt <- function(x, int,
           main=main,
           z.range=z.range)
   
+  return(p)
 }
 
 
@@ -157,21 +159,56 @@ ggplotSurface2 <- function(surface,
                            main=NULL,
                            z.range=range(surface)) {
 
-  # TODO: fixed z-range for visualizations
   # Set axis names
   xlab <- ifelse(is.null(xlab), '', xlab)
   ylab <- ifelse(is.null(ylab), '', ylab)
   zlab <- ifelse(is.null(zlab), '', zlab)
-  
+ 
   p <- reshape2::melt(surface) %>%
     ggplot(aes(x=Var1, y=Var2, fill=value)) +
     geom_tile() +
-    scale_fill_gradientn(colours=col.pal(100)) +
+    scale_fill_gradientn(colours=col.pal(100), limits=z.range) +
     xlab(xlab) +
     ylab(ylab) +
     labs(fill=zlab)
-  
+ 
   plot(p)
+}
+
+plotlyplotSurface2 <- function(surface,
+                               col.pal=magma,
+                               xlab=NULL,
+                               ylab=NULL,
+                               zlab=NULL,
+                               main=NULL,
+                               z.range=range(surface),
+                               axes=TRUE) {
+  
+  # Initialize color palette
+  if (length(unique(c(surface))) == 1) {
+    facet.col <- 1
+  } else {
+    facet.col <- as.numeric(cut(c(surface), 100))
+  }
+
+  colors <- col.pal(100)
+
+  # Set axis names
+  xlab <- ifelse(is.null(xlab), '', xlab)
+  ylab <- ifelse(is.null(ylab), '', ylab)
+  zlab <- ifelse(is.null(zlab), '', zlab)
+
+  # TODO: colorscale and main title
+  p <- plot_ly(z=~surface) %>%
+    add_surface() %>%
+    layout(scene=list(
+             xaxis=list(title=xlab),
+             yaxis=list(title=ylab),
+             zaxis=list(title=zlab, range=z.range)
+            )
+    )  
+  
+  return(p)    
 }
 
 rglplotSurface2 <- function(surface,
