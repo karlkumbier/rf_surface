@@ -34,11 +34,24 @@ genSurface <- function(x, int,
                        varnames=colnames(x),
                        nbin=100,
                        bins=NULL,
+                       binFun=NULL,
                        filter.rules=NULL) {
   
   n <- nrow(x)
   p <- ncol(x)
-  
+ 
+  # Check valididity of binning function
+  if (is.null(binFun)) {
+    binFun <- function(x) return(x)
+    qt.bin <- FALSE
+  } else if (is.character(binFun)) {
+    stopifnot(binFun == 'quantile')
+    qt.bin <- TRUE
+  } else {
+    stopifnot(is.function(binFun))
+    qt.bin <- FALSE
+  }
+
   # Read predictions from rf decision rules if no response supplied
   pred.prob <- is.null(y)
   
@@ -80,11 +93,16 @@ genSurface <- function(x, int,
     }
   }
 
-  # Generate grid to plot surface over either as raw values or quantiles
-  if (is.null(bins)) {
-    # Sequences spanning the range of each interacting feature
-    g1 <- seq(min(x[,int[1]]), max(x[,int[1]]), length.out=nbin)
-    g2 <- seq(min(x[,int[2]]), max(x[,int[2]]), length.out=nbin)
+  # Generate grid to plot surface over either as raw values or transformed
+  if (is.null(bins) & qt.bin) {
+    bins <- quantileGrid(x, nbin, int[1:2])
+    g1 <- bins$g1
+    g2 <- bins$g2
+  } else if (is.null(bins) & !qt.bin) {
+    fx1 <- binFun(x[,int[1]])
+    fx2 <- binFun(x[,int[2]]) 
+    g1 <- seq(min(fx1), max(fx1), length.out=nbin)
+    g2 <- seq(min(fx2), max(fx2), length.out=nbin)
   } else {
     # Pre-specified grid sequence
     g1 <- bins$g1
@@ -114,6 +132,10 @@ genSurface <- function(x, int,
 
   # Get thresholds and sign for interaction rules
   thresholds <- rectangles$splits
+  if (!qt.bin) {
+    thresholds <- binFun(thresholds)
+    x <- binFun(x)
+  }
 
   # Evaluate distriution of responses across each decision rule
   grid <- matrix(0, nrow=nbin, ncol=nbin)
@@ -140,13 +162,12 @@ genSurface <- function(x, int,
       
       if (any(x1 & x2)) {
         nsurface <- nsurface + wt[i]
-        y.active <- mean(y[x1 & x2]) * wt[i]
-        grid[i1, i2] <- grid[i1, i2] +  y.active
-        
-        y.inactive <- mean(y[!x1 | !x2]) * wt[i]
-        grid[!i1, i2] <- grid[!i1, i2] +  y.inactive
-        grid[i1, !i2] <- grid[i1, !i2] +  y.inactive
-        grid[!i1, !i2] <- grid[!i1, !i2] +  y.inactive
+        grid[i1, i2] <- grid[i1, i2] +  mean(y[x1 & x2]) * wt[i]
+
+        y0 <- mean(y[!(x1 & x2)]) * wt[i]
+        grid[!i1, i2] <- grid[!i1, i2] +  y0
+        grid[i1, !i2] <- grid[i1, !i2] +  y0
+        grid[!i1, !i2] <- grid[!i1, !i2] +  y0
       }
 
     }
@@ -191,7 +212,8 @@ forestHR <- function(read.forest, int) {
 
   # Set active nodes for interaction
   int.lf <- Matrix::rowMeans(read.forest$node.feature[,int] != 0) == 1
-  
+  if (sum(int.lf) == 0) stop('No leaf nodes contain selected interaction')
+
   # Group data by leaf node for return
   nodes <- read.forest$tree.info %>% 
       select(prediction, node.idx, tree, size.node)

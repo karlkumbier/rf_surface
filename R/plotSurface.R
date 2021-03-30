@@ -55,15 +55,28 @@ plotInt <- function(x, int,
                      slab=NULL,
                      z.range=NULL,
                      nbin=50,
+                     binFun=NULL,
                      filter.rules=NULL,
                      filterX=NULL,
                      wt.node='size',
-                     type='rgl',
+                     type='plotly',
                      main=NULL) {
  
   n <- nrow(x)
   p <- ncol(x)
   pred.prob <- is.null(y)
+
+  # Check valididity of binning function
+  if (is.null(binFun)) {
+    binFun <- function(x) return(x)
+    qt.bin <- FALSE
+  } else if (is.character(binFun)) {
+    stopifnot(binFun == 'quantile')
+    qt.bin <- TRUE
+  } else {
+    stopifnot(is.function(binFun))
+    qt.bin <- FALSE
+  }
 
   # Check for one of read.forest/fit
   if (is.null(read.forest) & is.null(fit)) {
@@ -110,7 +123,8 @@ plotInt <- function(x, int,
   }
   
   # Generate grid of x/y values for surface maps
-  bins <- quantileGrid(x, nbin, int[1:2])
+  bins <- NULL
+  if (qt.bin) bins <- quantileGrid(x, nbin, int[1:2])
   
   # Extract hyperrectangles from RF decision paths
   rectangles <- forestHR(read.forest, int)
@@ -129,14 +143,19 @@ plotInt <- function(x, int,
                         rectangles=rectangles, 
                         wt.node=wt.node,
                         filter.rules=filter.rules,
-                        bins=bins)
+                        bins=bins,
+                        nbin=nbin,
+                        binFun=binFun
+                        )
   
   # Set quantile names for grid
-  colnames(surface) <- seq(0, 1, length.out=nrow(surface))
-  rownames(surface) <- seq(0, 1, length.out=ncol(surface))
+  if (qt.bin) {
+    colnames(surface) <- seq(0, 1, length.out=nrow(surface))
+    rownames(surface) <- seq(0, 1, length.out=ncol(surface))
+  }
   
   # Select plotting method, one of rgl or ggplot
-  plotFun <- ifelse(type == 'rgl', plotlyplotSurface2, ggplotSurface2)
+  plotFun <- ifelse(type == 'plotly', plotlyplotSurface2, ggplotSurface2)
   
   # Generate response surface for curent group
   p <- plotFun(surface, 
@@ -185,26 +204,30 @@ plotlyplotSurface2 <- function(surface,
                                axes=TRUE) {
   
   # Initialize color palette
-  if (length(unique(c(surface))) == 1) {
-    facet.col <- 1
-  } else {
-    facet.col <- as.numeric(cut(c(surface), 100))
-  }
-
   colors <- col.pal(100)
-
+  quantiles <- seq(0, 1, length.out=100)
+  colorscale <- split(cbind(quantiles, colors), rep(1:100, 2))
+  names(colorscale) <- NULL
+  
   # Set axis names
   xlab <- ifelse(is.null(xlab), '', xlab)
   ylab <- ifelse(is.null(ylab), '', ylab)
   zlab <- ifelse(is.null(zlab), '', zlab)
 
-  # TODO: colorscale and main title
-  p <- plot_ly(z=~surface) %>%
-    add_surface() %>%
-    layout(scene=list(
-             xaxis=list(title=xlab),
-             yaxis=list(title=ylab),
-             zaxis=list(title=zlab, range=z.range)
+
+  p <- plotly::plot_ly(z=~surface, 
+                       x=as.numeric(rownames(surface)), 
+                       y=as.numeric(colnames(surface)),
+                       width=800,
+                       height=800) %>%
+    plotly::add_surface(colorscale=colorscale) %>%
+    plotly::layout(
+            autosize=FALSE,
+            title=main,
+            scene=list(
+              xaxis=list(title=xlab),
+              yaxis=list(title=ylab),
+              zaxis=list(title=zlab, range=z.range)
             )
     )  
   
