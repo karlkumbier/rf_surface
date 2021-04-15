@@ -10,9 +10,9 @@ set.seed(47)
 n <- 1000
 p <- 50
 
-x <- matrix(rnorm(n * p), nrow=n, ncol=p)
+x <- matrix(rexp(n * p), nrow=n, ncol=p)
 colnames(x) <- str_c('X', 1:ncol(x))
-y <- as.numeric(x[,1] > 0 & x[,2] > 0)
+y <- as.numeric(x[,1] > median(x[,1]) & x[,2] > median(x[,2]))
 
 # Random swapping noise
 id.swap <- sample(n, 100)
@@ -30,5 +30,5 @@ if (!file.exists('fit.Rdata')) {
 rule.list <- list()
 rule.list[[1]] <- function(x) sample_frac(x, 0.1)
 
-plotInt(x=x, int='X1+_X2+', read.forest=read.forest, y=y, z.range=0:1)
+plotInt(x=x, int='X1+_X2+', read.forest=read.forest, y=y, z.range=0:1, binFun=function(x) log(x))
 
