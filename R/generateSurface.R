@@ -35,10 +35,13 @@ genSurface <- function(x, int,
                        nbin=100,
                        bins=NULL,
                        binFun=NULL,
+                       yscale=1,
+                       yFun=function(x) return(x),
                        filter.rules=NULL) {
   
   n <- nrow(x)
   p <- ncol(x)
+  if (yscale == 0) stop('Cannot scale by 0')
  
   # Check valididity of binning function
   if (is.null(binFun)) {
@@ -179,7 +182,8 @@ genSurface <- function(x, int,
   
   rownames(grid) <- g1n
   colnames(grid) <- g2n
-  return(grid)
+  out <- yFun(grid / yscale)
+  return(out)
 }
 
 filterHR <- function(rectangles, rules) {

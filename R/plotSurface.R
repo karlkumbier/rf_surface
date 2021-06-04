@@ -56,6 +56,8 @@ plotInt <- function(x, int,
                      z.range=NULL,
                      nbin=50,
                      binFun=NULL,
+                     yscale=1,
+                     yFun=function(x) return(x),
                      filter.rules=NULL,
                      filterX=NULL,
                      wt.node='size',
@@ -106,8 +108,8 @@ plotInt <- function(x, int,
   if (is.factor(y)) y <- as.numeric(y) - 1
   
   # Set z-axis scaling
-  if (is.null(z.range) & !pred.prob) z.range <- range(y)
-  if (is.null(z.range) & pred.prob) z.range <- range(read.forest$tree.info$prediction)
+  #if (is.null(z.range) & !pred.prob) z.range <- range(y)
+  #if (is.null(z.range) & pred.prob) z.range <- range(read.forest$tree.info$prediction)
  
   # Check for valid interaction and convert to numeric IDs
   if (!is.numeric(int)) {
@@ -145,9 +147,11 @@ plotInt <- function(x, int,
                         filter.rules=filter.rules,
                         bins=bins,
                         nbin=nbin,
-                        binFun=binFun
+                        binFun=binFun,
+                        yscale=yscale,
+                        yFun=yFun
                         )
-  
+ 
   # Set quantile names for grid
   if (qt.bin) {
     colnames(surface) <- seq(0, 1, length.out=nrow(surface))
@@ -158,6 +162,7 @@ plotInt <- function(x, int,
   plotFun <- ifelse(type == 'plotly', plotlyplotSurface2, ggplotSurface2)
   
   # Generate response surface for curent group
+  if (is.null(z.range)) z.range <- range(surface)
   p <- plotFun(surface, 
           col.pal=col.pal,
           xlab=xlab, 
@@ -202,7 +207,7 @@ plotlyplotSurface2 <- function(surface,
                                main=NULL,
                                z.range=range(surface),
                                axes=TRUE) {
-  
+
   # Initialize color palette
   colors <- col.pal(100)
   quantiles <- seq(0, 1, length.out=100)
@@ -215,19 +220,19 @@ plotlyplotSurface2 <- function(surface,
   zlab <- ifelse(is.null(zlab), '', zlab)
 
 
-  p <- plotly::plot_ly(z=~surface, 
-                       x=as.numeric(rownames(surface)), 
+  p <- plotly::plot_ly(x=as.numeric(rownames(surface)), 
                        y=as.numeric(colnames(surface)),
                        width=800,
                        height=800) %>%
-    plotly::add_surface(colorscale=colorscale) %>%
+    plotly::add_surface(z=surface, colorscale=colorscale, cmin=z.range[1], cmax=z.range[2]) %>%
     plotly::layout(
             autosize=FALSE,
             title=main,
             scene=list(
               xaxis=list(title=xlab),
               yaxis=list(title=ylab),
-              zaxis=list(title=zlab, range=z.range)
+              zaxis=list(title=zlab, range=z.range),
+              aspectratio=list(x=1, y=1, z=1)
             )
     )  
   
