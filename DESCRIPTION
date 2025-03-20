@@ -24,4 +24,4 @@ Remotes:
 Author: Karl Kumbier
 Description: Decompose and visualize decision rules learned by a random forest. 
 Maintainer: Karl Kumbier <kkumbier@berkeley.edu>
-RoxygenNote: 7.1.1
+RoxygenNote: 7.3.1
